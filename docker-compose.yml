@@ -1,0 +1,9 @@
+version: "3.3"
+
+services:
+  dbot-impersonators:
+    env_file:
+      .env
+    build:
+      context: .
+    restart: unless-stopped
