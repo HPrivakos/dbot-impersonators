@@ -1,213 +1,419 @@
-import "dotenv/config";
-import Discord, { Intents, TextChannel } from "discord.js";
-import unhomoglyph from "./unhomoglyph";
+import 'dotenv/config'
+import Discord, { Intents, TextChannel } from 'discord.js'
+import unhomoglyph from './unhomoglyph'
+import { allowList, bannedNames, bannedWords, roles } from './config'
 
 const client = new Discord.Client({
   intents: [
     Intents.FLAGS.GUILDS,
     Intents.FLAGS.GUILD_MEMBERS,
     Intents.FLAGS.GUILD_MESSAGES,
-    Intents.FLAGS.GUILD_MESSAGE_REACTIONS,
-  ],
-});
+    Intents.FLAGS.GUILD_MESSAGE_REACTIONS
+  ]
+})
 
-let protectedUsers: { id: string; username: string; discriminator: string }[] = [];
-const protectedRoles: string[] = [];
+let protectedUsers: Discord.GuildMember[] = []
+const protectedRoles: string[] = []
 
-client.login(process.env.DISCORD_API_KEY!).then(async () => {
-  const guild = await client.guilds.fetch(process.env.GUILD_ID!);
-  const members = await guild.members.fetch();
+void client.login(process.env.DISCORD_API_KEY!).then(async () => {
+  const guild = await client.guilds.fetch(process.env.GUILD_ID!)
+  const members = await guild.members.fetch({ force: true })
+  const membersList = members.toJSON()
+  await Promise.all(
+    roles.map((roleId) => addRoleToProtectedList(guild, roleId))
+  )
 
-  const membersList = members.toJSON();
-
-  await Promise.all([
-    addRoleToProtectedList(guild, "420256938807263260") /* Admin */,
-    addRoleToProtectedList(guild, "836764299460083753") /* HPrivakos */,
-    //addRoleToProtectedList(guild, "423163126532276227") /* Pokegoat */,
-    addRoleToProtectedList(guild, "626480948825030656") /* Decentraland */,
-    addRoleToProtectedList(guild, "531448171646418944") /* Community Mods */,
-    addRoleToProtectedList(guild, "617756765034905621") /* Mentor */,
-    //addRoleToProtectedList(guild, "857891892490272769") /* DAO */,
-  ]);
-  protectedUsers = uniqBy(protectedUsers, (a) => JSON.stringify({ id: a.id, username: a.username }));
-
-  console.log("Number of protected users:", protectedUsers.length);
+  console.log('Number of protected users:', protectedUsers.length)
+  console.log('Number of members:', membersList.length)
 
   for (const member of membersList) {
-    checkAgainstProtected(member);
+    void checkAgainstProtected(member)
   }
 
-  client.on("guildMemberUpdate", (oldMember, newMember) => {
-    const newMemberRole = newMember.roles.cache.toJSON();
-    const oldMemberRole = oldMember.roles.cache.toJSON();
-    const addedRole = newMemberRole.filter((x) => oldMemberRole.indexOf(x) === -1);
-    const removedRole = oldMemberRole.filter((x) => newMemberRole.indexOf(x) === -1);
+  client.on('guildMemberUpdate', (oldMember, newMember) => {
+    const newMemberRole = newMember.roles.cache.toJSON()
+    const oldMemberRole = oldMember.roles.cache.toJSON()
+    const addedRole = newMemberRole.filter((x) => !oldMemberRole.includes(x))
+    const removedRole = oldMemberRole.filter((x) => !newMemberRole.includes(x))
     /* If role added to user, add protection */
-    if (addedRole.map((r) => r.name).length && protectedRoles.indexOf(addedRole[0].id)) {
-      console.log(`Adding ${newMember.user.username} to the protected list (role added)`);
-      protectedUsers.push({
-        id: newMember.user.id,
-        username: newMember.user.username,
-        discriminator: newMember.user.discriminator,
-      });
-      if (newMember.nickname && newMember.nickname != newMember.user.username) {
-        console.log(`Adding ${newMember.nickname} to the protected list (role added)`);
-        protectedUsers.push({
-          id: newMember.user.id,
-          username: newMember.nickname,
-          discriminator: newMember.user.discriminator,
-        });
-      }
+    if (
+      addedRole.map((r) => r.name).length &&
+      protectedRoles.includes(addedRole[0].id)
+    ) {
+      console.log(
+        `Adding ${newMember.user.username} to the protected list (role added)`
+      )
+      protectedUsers.push(newMember)
     }
 
     /* If role removed from user, remove protection */
-    if (removedRole.map((r) => r.name).length && protectedRoles.indexOf(removedRole[0].id)) {
-      if (newMember.nickname) console.log(`Removing ${newMember.nickname} from the protected list (role removed)`);
-      console.log(`Removing ${newMember.user.username} from the protected list (role removed)`);
+    if (
+      removedRole.map((r) => r.name).length &&
+      protectedRoles.includes(removedRole[0].id)
+    ) {
+      console.log(
+        `Removing ${newMember.user.username} from the protected list (role removed)`
+      )
       protectedUsers = protectedUsers.filter((u) => {
-        if (u.username == newMember.user.username && u.id == newMember.id) return false;
-        if (u.username == newMember.nickname && u.id == newMember.id) return false;
-        return true;
-      });
+        if (u.id == newMember.id) return false
+        return true
+      })
     }
 
     /* On nickname change (guild-wide) */
     if (oldMember.nickname != newMember.nickname) {
       const isProtectedUser = !!protectedUsers.find((v) => {
-        if (oldMember.id == v.id) return true;
-      });
+        if (oldMember.id == v.id) return true
+        else return false
+      })
       if (isProtectedUser) {
-        if (oldMember.nickname) {
-          const index = protectedUsers.findIndex((v) => {
-            if (oldMember.id == v.id && oldMember.nickname == v.username) return true;
-          });
-          // Nickname change
-          if (newMember.nickname) {
-            console.log(
-              `Changing (old: ${oldMember.nickname}) ${newMember.nickname} in the protected list (nickname changed)`
-            );
-            protectedUsers[index].username = newMember.nickname;
-          }
-          // Nickname removed
-          else {
-            console.log(`Removing ${newMember.nickname} from the protected list (nickname removed)`);
-            protectedUsers.splice(index, 1);
-          }
-        } else if (newMember.nickname) {
-          // Nickname added
-          console.log(`Adding ${newMember.nickname} to the protected list (new nickname)`);
-          protectedUsers.push({
-            id: newMember.id,
-            username: newMember.nickname,
-            discriminator: newMember.user.discriminator,
-          });
-        }
+        const index = protectedUsers.findIndex((v) => {
+          if (oldMember.id == v.id) return true
+          else return false
+        })
+        protectedUsers[index] = newMember
+        console.log('New number of protected users:', protectedUsers.length)
       }
     }
-    protectedUsers = uniqBy(protectedUsers, (a) => JSON.stringify({ id: a.id, username: a.username }));
-    console.log("New number of protected users:", protectedUsers.length);
-  });
-  client.on("userUpdate", async (oldUser, newUser) => {
+  })
+  client.on('userUpdate', async (oldUser, newUser) => {
     /* On username change (Discord-wide) */
     if (oldUser.username != newUser.username) {
+      console.log('Old name', oldUser.username)
+      console.log('New name', newUser.username)
+
       const isProtectedUser = !!protectedUsers.find((v) => {
-        if (oldUser.id == v.id) return true;
-      });
-      if (!isProtectedUser) {
+        if (oldUser.id == v.id) return true
+        else return false
+      })
+      if (isProtectedUser) {
         const index = protectedUsers.findIndex((v) => {
-          if (oldUser.id == v.id && oldUser.username == v.username) return true;
-        });
+          if (oldUser.id == v.id) return true
+          else return false
+        })
+        if (index == -1) return
         // User change
-        console.log(`Changing (old: ${oldUser.username}) ${newUser.username} in the protected list (username changed)`);
-        protectedUsers[index].username = newUser.username;
-        protectedUsers = uniqBy(protectedUsers, (a) => JSON.stringify({ id: a.id, username: a.username }));
+        console.log(
+          `Changing (old: ${oldUser.username}) ${newUser.username} in the protected list (username changed)`
+        )
+        protectedUsers[index] = await guild.members.fetch(newUser)
       }
       // Not protected user, pass the new username through the protected list
       else {
-        checkAgainstProtected(await guild.members.fetch(newUser.id));
+        void checkAgainstProtected(await guild.members.fetch(newUser.id))
       }
-
     }
-  });
-});
+  })
+  client.on('guildMemberAdd', async (newUser) => {
+    /* On user join */
+    void checkAgainstProtected(newUser)
+  })
+  client.on('messageCreate', async (msg) => {
+    if (msg.channel.type != 'GUILD_TEXT') return
+    if (msg.channel.id == '944650179229917185' && !msg.author.bot) {
+      if (msg.content.toLowerCase().indexOf('delete-all') !== -1)
+        await deleteAll(
+          guild,
+          msg.content.toLowerCase().replace('delete-all', '').trim()
+        )
+      if (msg.mentions.members) {
+        console.log(msg.mentions.toJSON())
+        const list: Discord.GuildMember[] = []
+        for (const member of msg.mentions.members.toJSON()) {
+          await member
+            .ban()
+            .then((a) => {
+              list.push(a)
+            })
+            .catch((e) => console.log(e))
+          if (msg.content.toLowerCase().indexOf('delete-all') !== -1)
+            await deleteAll(guild, member.id)
+        }
+        if (list.length) {
+          await msg.reply(
+            `Banned: ${list
+              .map(
+                (a) =>
+                  `<@${a.id}> (\`${a.user.username}#${a.user.discriminator}\`)`
+              )
+              .join(', ')}`
+          )
+          await msg.react('✅')
+        }
+      }
+      return
+    }
+    if (
+      msg.content.startsWith('@everyone') &&
+      msg.content.toLowerCase().includes('http') &&
+      msg.member?.bannable
+    ) {
+      const guild = await client.guilds.fetch(process.env.GUILD_ID!)
+      const logsChannel = (await guild.channels.fetch(
+        process.env.LOGS_CHANNEL!
+      )) as TextChannel
+
+      await logsChannel.send({
+        content: `<@${msg.member.id}> (${
+          msg.member.nickname ? `nickname: ${msg.member.nickname}, ` : ''
+        }username: ${msg.member.user.username}#${
+          msg.member.user.discriminator
+        }) was banned for posting a messages starting with (at)everyone.
+        \`\`\`${msg.content}\`\`\``
+      })
+
+      await msg.member.ban({
+        days: 7,
+        reason: 'Sent message starting by @everyone'
+      })
+    }
+  })
+})
 
 async function addRoleToProtectedList(guild: Discord.Guild, roleId: string) {
-  protectedRoles.push(roleId);
+  protectedRoles.push(roleId)
   await guild.roles.fetch(roleId).then((r) =>
     r?.members.each((u) => {
-      if (u.nickname && u.nickname != u.user.username)
-        protectedUsers.push({ id: u.user.id, username: u.nickname, discriminator: u.user.discriminator });
-      return protectedUsers.push({ id: u.user.id, username: u.user.username, discriminator: u.user.discriminator });
+      return protectedUsers.push(u)
     })
-  );
+  )
 }
 
-function uniqBy(a: { id: string; username: string; discriminator: string }[], key: (a: any) => string) {
-  const seen: { [key: string]: boolean } = {};
-  return a.filter(function (item) {
-    const k = key(item);
-    return Object.prototype.hasOwnProperty.call(seen, k) ? false : (seen[k] = true);
-  });
-}
-
-async function ban(
+async function banMember(
   scammer: Discord.GuildMember,
-  protectedUser: { id: string; username: string; discriminator: string }
+  protectedUser: Discord.GuildMember
 ) {
-  const guild = await client.guilds.fetch(process.env.GUILD_ID!);
-  const logsChannel = (await guild.channels.fetch(process.env.LOGS_CHANNEL!)) as TextChannel;
+  console.log('banning', scammer.user.username)
 
-  if (process.env.ASK_BEFORE_BAN == "1") {
+  const guild = await client.guilds.fetch(process.env.GUILD_ID!)
+  const logsChannel = (await guild.channels.fetch(
+    process.env.LOGS_CHANNEL!
+  )) as TextChannel
+
+  if (process.env.ASK_BEFORE_BAN == '1') {
     await logsChannel
       .send({
-        content: `<@${scammer.id}> (${scammer.nickname ? `nickname: ${scammer.nickname}, ` : ""}username: ${
-          scammer.user.username
-        }#${scammer.user.discriminator}) tried to impersonate <@${protectedUser.id}>, should they get banned?`,
+        content: `<@${scammer.id}> (${
+          scammer.nickname ? `nickname: ${scammer.nickname}, ` : ''
+        }username: ${scammer.user.username}#${
+          scammer.user.discriminator
+        }) may be trying to impersonate <@${
+          protectedUser.id
+        }>, should they get banned?`
       })
       .then(async (m) => {
-        await m.react("👍").then(async () => await m.react("👎"));
+        await m.react('👍').then(async () => await m.react('👎'))
         await m
           .awaitReactions({
             max: 1,
-            time: 10 * 60 * 1000,
-            errors: ["time"],
-            filter: (a, b) => b.username !== client.user?.username,
+            time: 120 * 60 * 1000,
+            errors: ['time'],
+            filter: (_a, b) => b.username !== client.user?.username
           })
           .then(async (collected) => {
-            const reaction = collected.first();
+            const reaction = collected.first()
 
-            if (!reaction) return;
-            const user = await reaction.users.fetch().then((u) => u.filter((u) => u.id != client.user?.id).first());
-            if (reaction.emoji.name === "👎") {
-              m.reply(`Not banning <@${scammer.id}> after vote from <@${user?.id}>`);
-              return;
+            if (!reaction) return
+            const user = await reaction.users
+              .fetch()
+              .then((u) => u.filter((u) => u.id != client.user?.id).first())
+            if (reaction.emoji.name === '👎') {
+              void m.reply(
+                `:no_entry_sign: Not banning <@${scammer.id}> (<@${user?.id}>)`
+              )
+              return
             }
-            if (reaction.emoji.name === "👍") {
+            if (reaction.emoji.name === '👍') {
               await scammer.ban({
-                reason: `Impersonating ${protectedUser.username}`,
-              });
-              m.reply(`<@${scammer.id}> was banned after vote from <@${user?.id}>`);
+                reason: `Impersonating ${protectedUser.user.username}`,
+                days: 7
+              })
+              void m.reply(
+                `:white_check_mark: <@${scammer.id}> was banned (<@${user?.id}>)`
+              )
             }
           })
           .catch((e) => {
-            console.log(e);
-          });
-      });
+            console.log(e)
+          })
+      })
   } else {
-    await scammer.ban({ reason: `Impersonating ${protectedUser.username}` });
-    await logsChannel.send(
-      `Banned <@${scammer.user.id}> (${scammer.user.username}#${scammer.user.discriminator}) for impersonating <@${protectedUser.id}> (${protectedUser.username}#${protectedUser.discriminator})`
-    );
+    await scammer.ban({
+      reason: `Impersonating ${protectedUser.user.username}`,
+      days: 1
+    })
+    const msg = await logsChannel.send(
+      `Banned <@${scammer.user.id}> (\`${scammer.user.username}#${scammer.user.discriminator}\`) for impersonating <@${protectedUser.id}> (${protectedUser.user.username}#${protectedUser.user.discriminator})`
+    )
+    await msg.react('👎')
+    await msg
+      .awaitReactions({
+        max: 1,
+        time: 120 * 60 * 1000,
+        errors: ['time'],
+        filter: (_a, b) => b.username !== client.user?.username
+      })
+      .then(async (collected) => {
+        const reaction = collected.first()
+
+        if (!reaction) return
+        if (reaction.emoji.name === '👎') {
+          await guild.bans.remove(scammer.user)
+          return
+        }
+      })
+      .catch((e) => {
+        console.log(e)
+      })
+  }
+}
+async function banWord(scammer: Discord.GuildMember, protectedWord: string) {
+  console.log('banning', scammer.user.username)
+
+  const guild = await client.guilds.fetch(process.env.GUILD_ID!)
+  const logsChannel = (await guild.channels.fetch(
+    process.env.LOGS_CHANNEL!
+  )) as TextChannel
+
+  if (process.env.ASK_BEFORE_BAN == '1') {
+    await logsChannel
+      .send({
+        content: `<@${scammer.id}> (${
+          scammer.nickname ? `nickname: ${scammer.nickname}, ` : ''
+        }username: ${scammer.user.username}#${
+          scammer.user.discriminator
+        }) is using the banned word \`${protectedWord}\`, should they get banned?`
+      })
+      .then(async (m) => {
+        await m.react('👍').then(async () => await m.react('👎'))
+        await m
+          .awaitReactions({
+            max: 1,
+            time: 120 * 60 * 1000,
+            errors: ['time'],
+            filter: (_a, b) => b.username !== client.user?.username
+          })
+          .then(async (collected) => {
+            const reaction = collected.first()
+
+            if (!reaction) return
+            const user = await reaction.users
+              .fetch()
+              .then((u) => u.filter((u) => u.id != client.user?.id).first())
+            if (reaction.emoji.name === '👎') {
+              void m.reply(
+                `:no_entry_sign: Not banning <@${scammer.id}> (<@${user?.id}>)`
+              )
+              return
+            }
+            if (reaction.emoji.name === '👍') {
+              await scammer.ban({
+                reason: `Impersonating ${protectedWord}`,
+                days: 1
+              })
+              void m.reply(
+                `:white_check_mark: <@${scammer.id}> was banned (<@${user?.id}>)`
+              )
+            }
+          })
+          .catch((e) => {
+            console.log(e)
+          })
+      })
+  } else {
+    await scammer.ban({ reason: `Impersonating ${protectedWord}`, days: 1 })
+    const msg = await logsChannel.send(
+      `Banned <@${scammer.user.id}> (\`${scammer.user.username}#${scammer.user.discriminator}\`) for using the banned word \`${protectedWord}\`)`
+    )
+    await msg.react('👎')
+    await msg
+      .awaitReactions({
+        max: 1,
+        time: 120 * 60 * 1000,
+        errors: ['time'],
+        filter: (_a, b) => b.username !== client.user?.username
+      })
+      .then(async (collected) => {
+        const reaction = collected.first()
+
+        if (!reaction) return
+        if (reaction.emoji.name === '👎') {
+          await guild.bans.remove(scammer.user)
+          return
+        }
+      })
+      .catch((e) => {
+        console.log(e)
+      })
   }
 }
 
 function checkAgainstProtected(member: Discord.GuildMember) {
+  if (member.user.id == client.user?.id) return
+  if (allowList.includes(member.user.id)) return
+
   for (const protectedUser of protectedUsers) {
     if (
-      unhomoglyph(member.user.username).toLowerCase() == unhomoglyph(protectedUser.username).toLowerCase() &&
+      unhomoglyph(member.user.username) ==
+        unhomoglyph(protectedUser.user.username) &&
       member.user.id != protectedUser.id
     ) {
-      ban(member, protectedUser);
+      console.log(member.user.id, member.user.username)
+      console.log(protectedUser.user.id, protectedUser.user.username)
+      return banMember(member, protectedUser)
+    }
+  }
+  for (const protectedUser of protectedUsers) {
+    if (
+      protectedUser.nickname &&
+      unhomoglyph(member.user.username) ==
+        unhomoglyph(protectedUser.nickname) &&
+      member.user.id != protectedUser.id
+    ) {
+      console.log(member.user.id, member.user.username)
+      console.log(protectedUser.user.id, protectedUser.user.username)
+      return banMember(member, protectedUser)
+    }
+  }
+  for (const word of bannedWords) {
+    if (
+      unhomoglyph(member.user.username).includes(unhomoglyph(word)) &&
+      !protectedUsers.find((a) => a.user.id == member.user.id)
+    )
+      return banWord(member, word)
+  }
+  for (const word of bannedNames) {
+    if (
+      new RegExp(`\\b${word}\\b`).test(
+        unhomoglyph(member.user.username).toLowerCase()
+      ) &&
+      !protectedUsers.find((a) => a.user.id == member.user.id)
+    )
+      return banWord(member, word)
+    if (
+      new RegExp(`\\b${unhomoglyph(word)}\\b`).test(
+        unhomoglyph(member.user.username).toLowerCase()
+      ) &&
+      !protectedUsers.find((a) => a.user.id == member.user.id)
+    )
+      return banWord(member, word)
+  }
+}
+
+async function deleteAll(guild: Discord.Guild, userId: string) {
+  console.log('delete all from', userId)
+
+  const channels = await guild.channels.fetch()
+  for await (const channel of channels) {
+    if (!channel[1]) continue
+    if (channel[1].type !== 'GUILD_TEXT') continue
+    const messages = await channel[1].messages
+      .fetch({ limit: 100 })
+      .catch(() => {
+        return []
+      })
+    for await (const message of messages) {
+      if (message[1].author.id == userId) await message[1].delete()
     }
   }
 }
